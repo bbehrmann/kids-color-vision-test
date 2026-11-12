@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Find the Shape: Color Vision Game</title>
+<style>
+  :root { --bg:#faf7f2; --ink:#2b2622; --muted:#7a7068; --line:#e7e0d6; --accent:#c8643b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:720px; margin:0 auto; padding:16px 16px 48px; text-align:center; }
+  h1 { font-size:26px; margin:4px 0 12px; }
+  .plate { width:100%; max-width:520px; aspect-ratio:1; display:block; margin:0 auto; }
+  .choices { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin:18px auto 8px; max-width:600px; }
+  @media (max-width:480px){ .choices { grid-template-columns:repeat(3,1fr); } }
+  .choice { background:#fff; border:3px solid var(--line); border-radius:16px; padding:8px; cursor:pointer; }
+  .choice canvas { width:100%; aspect-ratio:1; display:block; }
+  .choice.right { border-color:#2f9e44; background:#ebfbee; }
+  .choice.wrong { border-color:#e03131; background:#fff5f5; }
+  .feedback { font-size:22px; font-weight:700; min-height:34px; }
+  .bar { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; align-items:center; margin-top:14px; }
+  button.new { font:inherit; font-size:20px; font-weight:700; padding:12px 28px; border-radius:999px; border:0; background:var(--accent); color:#fff; cursor:pointer; }
+  select, button.small { font:inherit; font-size:14px; padding:7px 10px; border-radius:8px; border:1px solid var(--line); background:#fff; }
+  label { font-size:14px; color:var(--muted); display:flex; gap:6px; align-items:center; }
+  .note { font-size:13px; color:var(--muted); margin-top:24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Which shape is hiding?</h1>
+  <canvas class="plate" id="plate"></canvas>
+  <div class="feedback" id="feedback"></div>
+  <div class="choices" id="choices"></div>
+  <div class="bar">
+    <button class="new" id="new">New shape</button>
+  </div>
+  <div class="bar">
+    <label>Test <select id="type"></select></label>
+    <label>Color strength <input type="range" id="strength" min="0.3" max="1" step="0.05" value="1"></label>
+    <label><input type="checkbox" id="gray"> Gray background (HRR-style)</label>
+    <button class="small" id="answer">Show answer</button>
+  </div>
+  <p class="note">Start with the Practice plates so the child learns the game. Use a bright screen with night mode and blue-light filters off. This is a home screening game, not a medical test.</p>
+</main>
+<canvas id="confetti" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none"></canvas>
+
+<script>
+// Cone-response (LMS) conversion. Colors that differ only in the cone a person
+// lacks look the same to them, so the shape shifts just that one cone.
+const T  = [[17.8824,43.5161,4.11935],[3.45565,27.1554,3.86714],[0.0299566,0.184309,1.46709]];
+const Ti = [[0.080944,-0.130504,0.116721],[-0.010249,0.054019,-0.113615],[-0.000365,-0.004122,0.693511]];
+const TYPES = {
+  control: { label:"Practice (everyone sees)",              cone:-1, base:[.42,.36,.12], s:0 },
+  deutan:  { label:"Deuteranopia (red-green, most common)", cone:1,  base:[.55,.35,.55], s:.3, gray:{d:-1, s:.5} },
+  protan:  { label:"Protanopia (red-green)",                cone:0,  base:[.55,.25,.35], s:.3, gray:{d:1,  s:.4} },
+  tritan:  { label:"Tritanopia (blue-yellow)",              cone:2,  base:[.15,.15,.55], s:.9, gray:{d:1,  s:2} },
+};
+const mul = (m,v) => m.map(r => r[0]*v[0]+r[1]*v[1]+r[2]*v[2]);
+const toHex = c => "#" + c.map(x => { x = Math.min(1,Math.max(0,x)); x = x<=.0031308 ? 12.92*x : 1.055*x**(1/2.4)-.055; return Math.round(x*255).toString(16).padStart(2,"0"); }).join("");
+
+// Gray mode (HRR-style): the background stays neutral gray and the shape is gray
+// pushed toward purple along the line of colors that look gray to that person.
+function dotColor(t, fig, strength, gray) {
+  const g = gray && t.gray, s = (g ? g.s : t.s)*strength, inGamut = c => c.every(v => v >= 0 && v <= 1);
+  for (let i = 0; i < 60; i++) {
+    const k = .6 + .4*Math.random();
+    const b = gray ? [.3,.3,.3].map(v => v*k*(.97+.06*Math.random())) : t.base.map(v => v*k*(.93+.14*Math.random()));
+    if (t.cone < 0) return toHex(fig ? b.map(v => v*.22) : b);
+    const lms = mul(T, b), up = [...lms], down = [...lms];
+    if (g) { up[t.cone] *= 1 + g.d*s; const a = mul(Ti, up); if (inGamut(a)) return toHex(fig ? a : b); continue; }
+    up[t.cone] *= 1+s; down[t.cone] *= 1-s;
+    const a = mul(Ti, up), c = mul(Ti, down);
+    if (inGamut(a) && inGamut(c)) return toHex(fig === (t.cone !== 1) ? a : c);
+  }
+  return toHex(t.base);
+}
+
+// ---- shapes, drawn in a 100×100 box ----
+const SHAPES = {
+  circle:   c => c.arc(50,50,42,0,2*Math.PI),
+  square:   c => c.rect(14,14,72,72),
+  triangle: c => { c.moveTo(50,8); c.lineTo(94,88); c.lineTo(6,88); c.closePath(); },
+  star:     c => { for (let i = 0; i < 10; i++) { const r = i%2 ? 19 : 46, a = -Math.PI/2 + i*Math.PI/5; c.lineTo(50+r*Math.cos(a), 54+r*Math.sin(a)); } c.closePath(); },
+  heart:    c => { c.moveTo(50,90); c.bezierCurveTo(-5,52,10,0,50,26); c.bezierCurveTo(90,0,105,52,50,90); },
+  moon:     c => { c.arc(50,50,42,0.5*Math.PI,1.5*Math.PI,false); c.bezierCurveTo(22,24,22,76,50,92); },
+};
+function drawShape(ctx, name, size, color) {
+  ctx.save(); ctx.scale(size/100, size/100); ctx.beginPath(); SHAPES[name](ctx);
+  ctx.fillStyle = color; ctx.fill(); ctx.restore();
+}
+
+// ---- plate ----
+const N = 200;
+function shapeMask(name) {
+  const c = document.createElement("canvas"); c.width = c.height = N;
+  const ctx = c.getContext("2d");
+  ctx.translate(N*.11, N*.11); drawShape(ctx, name, N*.78, "#000");
+  const d = ctx.getImageData(0,0,N,N).data, mask = new Uint8Array(N*N);
+  for (let i = 0; i < N*N; i++) mask[i] = d[i*4+3] > 127 ? 1 : 0;
+  return mask;
+}
+function drawPlate(canvas, mask, type, strength, gray) {
+  const S = canvas.width = canvas.height = 900, R = 435, ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0,0,S,S);
+  const rmin = 4.5, rmax = 12, gap = 2, cell = 2*rmax + gap;
+  const G = Math.ceil(2*R/cell)+1, grid = Array.from({length:G*G}, () => []);
+  const tries = Math.round(14*R*R/(rmin*rmin)), t = TYPES[type];
+  for (let i = 0; i < tries; i++) {
+    const r = Math.max(rmin, (rmax - (rmax-rmin)*Math.min(1, 1.4*i/tries)) * (.8+.2*Math.random()));
+    const a = Math.random()*2*Math.PI, d = Math.sqrt(Math.random())*(R-r);
+    const x = d*Math.cos(a), y = d*Math.sin(a);
+    const gx = Math.floor((x+R)/cell), gy = Math.floor((y+R)/cell);
+    let ok = true;
+    for (let j = gy-1; j <= gy+1 && ok; j++) for (let k = gx-1; k <= gx+1 && ok; k++) {
+      const c = grid[j*G+k]; if (!c) continue;
+      for (const o of c) if ((o[0]-x)**2 + (o[1]-y)**2 < (o[2]+r+gap)**2) { ok = false; break; }
+    }
+    if (!ok) continue;
+    grid[gy*G+gx].push([x,y,r]);
+    const mx = Math.min(N-1, Math.floor((x+R)/(2*R)*N)), my = Math.min(N-1, Math.floor((y+R)/(2*R)*N));
+    ctx.fillStyle = dotColor(t, mask[my*N+mx] === 1, strength, gray);
+    ctx.beginPath(); ctx.arc(S/2+x, S/2+y, r, 0, 2*Math.PI); ctx.fill();
+  }
+}
+
+// ---- game ----
+const $ = id => document.getElementById(id);
+const typeSel = $("type");
+typeSel.innerHTML = Object.entries(TYPES).map(([k,v]) => `<option value="${k}">${v.label}</option>`).join("");
+let current = null;
+
+const choiceEls = Object.keys(SHAPES).map(name => {
+  const b = document.createElement("button"); b.className = "choice"; b.setAttribute("aria-label", name);
+  const c = document.createElement("canvas"); c.width = c.height = 120;
+  drawShape(c.getContext("2d"), name, 120, "#3a3330");
+  b.append(c); $("choices").append(b);
+  b.onclick = () => {
+    const right = name === current;
+    b.classList.add(right ? "right" : "wrong");
+    $("feedback").textContent = right ? "Yes! It's a " + name + "!" : "Try again";
+    if (right) confetti();
+  };
+  return [name, b];
+});
+
+let confettiEnd = 0;
+function confetti() {
+  if (performance.now() < confettiEnd) return;
+  const c = $("confetti"), ctx = c.getContext("2d"), W = c.width = innerWidth, H = c.height = innerHeight;
+  const colors = ["#f03e3e","#fab005","#40c057","#228be6","#be4bdb","#fd7e14"];
+  const bits = Array.from({length:160}, () => ({
+    x: W/2, y: H*.6, vx: (Math.random()-.5)*18, vy: -Math.random()*18-6,
+    s: 6+Math.random()*6, r: Math.random()*6, vr: (Math.random()-.5)*.4, col: colors[Math.floor(Math.random()*6)],
+  }));
+  const end = confettiEnd = performance.now() + 3000;
+  (function frame(now) {
+    ctx.clearRect(0,0,W,H);
+    for (const b of bits) {
+      b.vy += .45; b.vx *= .99; b.x += b.vx; b.y += b.vy; b.r += b.vr;
+      ctx.save(); ctx.translate(b.x,b.y); ctx.rotate(b.r); ctx.fillStyle = b.col;
+      ctx.fillRect(-b.s/2, -b.s/4, b.s, b.s/2); ctx.restore();
+    }
+    if (now < end) requestAnimationFrame(frame); else ctx.clearRect(0,0,W,H);
+  })(performance.now());
+}
+
+function newShape() {
+  const names = Object.keys(SHAPES).filter(n => n !== current);
+  current = names[Math.floor(Math.random()*names.length)];
+  redraw();
+}
+function redraw() {
+  choiceEls.forEach(([, b]) => b.classList.remove("right", "wrong"));
+  $("feedback").textContent = "";
+  drawPlate($("plate"), shapeMask(current), typeSel.value, +$("strength").value, $("gray").checked);
+}
+$("new").onclick = newShape;
+$("answer").onclick = () => { choiceEls.find(([n]) => n === current)[1].classList.add("right"); $("feedback").textContent = "It's a " + current; };
+typeSel.onchange = redraw;
+$("strength").onchange = redraw;
+$("gray").onchange = redraw;
+newShape();
+</script>
+</body>
+</html>

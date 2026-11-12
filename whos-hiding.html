@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Who's Hiding? Color Vision Plates</title>
+<style>
+  :root { --bg:#faf7f2; --ink:#2b2622; --muted:#7a7068; --card:#fff; --line:#e7e0d6; --accent:#c8643b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:960px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .drop { display:block; border:2px dashed var(--line); border-radius:14px; padding:28px; text-align:center; background:var(--card); cursor:pointer; }
+  .drop.over { border-color:var(--accent); }
+  .drop strong { color:var(--accent); }
+  .drop input { display:none; }
+  details { margin:16px 0 24px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 16px; }
+  summary { cursor:pointer; font-weight:600; }
+  details ol { padding-left:20px; margin:8px 0 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:20px; display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:20px; }
+  @media (max-width:720px){ .card { grid-template-columns:1fr; } }
+  .plate { width:100%; max-width:560px; aspect-ratio:1; display:block; margin:0 auto; cursor:zoom-in; }
+  .plate:fullscreen { background:#fff; object-fit:contain; cursor:zoom-out; max-width:none; }
+  .thumbs { display:flex; gap:8px; margin-bottom:12px; }
+  .thumbs figure { margin:0; flex:1; text-align:center; font-size:12px; color:var(--muted); }
+  .thumbs canvas { width:100%; aspect-ratio:1; border-radius:8px; border:1px solid var(--line); }
+  .thumbs figure:first-child { flex:3; }
+  .thumbs figure:last-child { flex:2; }
+  .orig { cursor:crosshair; touch-action:none; }
+  label.row { display:block; font-size:14px; margin:10px 0 2px; }
+  label.row span { color:var(--muted); float:right; }
+  input[type=range], select { width:100%; }
+  select { padding:6px; border-radius:8px; border:1px solid var(--line); font:inherit; background:#fff; }
+  .chk { font-size:14px; display:flex; gap:6px; align-items:center; margin-top:10px; }
+  .btns { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+  button { font:inherit; font-size:14px; padding:7px 12px; border-radius:8px; border:1px solid var(--line); background:#fff; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .msg { font-size:13px; color:var(--muted); min-height:1.2em; margin-top:6px; }
+  .note { font-size:13px; color:var(--muted); margin-top:28px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Who's Hiding?</h1>
+  <p class="sub">Turn photos of familiar people into dotted color-vision plates. The face is drawn only with color differences, so a child points to <em>who</em> they see instead of reading a number.</p>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="image/*" multiple>
+    <strong>Choose photos</strong> or drop them here<br>
+    <small>Close-up face photos with a plain background work best. Photos stay in this browser, nothing is uploaded.</small>
+  </label>
+
+  <details>
+    <summary>How to run the test</summary>
+    <ol>
+      <li>Make a <b>Practice (everyone sees)</b> plate first. Use it to show the child the game: "Someone is hiding in the dots. Who is it?"</li>
+      <li>Make deuteranopia, protanopia and tritanopia plates from <em>different</em> photos, so the child can't remember a face from an earlier plate.</li>
+      <li>Tap a plate to show it full screen. Use a bright screen in normal room light, with night mode and blue-light filters off.</li>
+      <li>If the child names the practice faces but not the others, check how the mask preview looks, then talk to a pediatrician or eye doctor.</li>
+    </ol>
+  </details>
+
+  <div id="cards"></div>
+
+  <p class="note">This is a screening game for home use, not a medical test. Screens show color differently, so a missed plate means "get it checked," not a diagnosis.</p>
+</main>
+
+<script>
+// Cone-response (LMS) conversion. Colors that differ only in the cone a person
+// lacks look the same to them, so the figure shifts just that one cone.
+const T  = [[17.8824,43.5161,4.11935],[3.45565,27.1554,3.86714],[0.0299566,0.184309,1.46709]];
+const Ti = [[0.080944,-0.130504,0.116721],[-0.010249,0.054019,-0.113615],[-0.000365,-0.004122,0.693511]];
+const TYPES = {
+  deutan:  { label:"Deuteranopia (red-green, most common)", cone:1, base:[.55,.35,.55], s:.3 },
+  protan:  { label:"Protanopia (red-green)",                   cone:0, base:[.55,.25,.35], s:.3 },
+  tritan:  { label:"Tritanopia (blue-yellow)",                           cone:2, base:[.15,.15,.55], s:.9 },
+  control: { label:"Practice (everyone sees)",                          cone:-1, base:[.42,.36,.12], s:0 },
+};
+const mul = (m,v) => m.map(r => r[0]*v[0]+r[1]*v[1]+r[2]*v[2]);
+const toHex = c => "#" + c.map(x => { x = Math.min(1,Math.max(0,x)); x = x<=.0031308 ? 12.92*x : 1.055*x**(1/2.4)-.055; return Math.round(x*255).toString(16).padStart(2,"0"); }).join("");
+
+// Both the figure and ground versions of a base color must fit on screen,
+// so the two sets of dots share the same random brightness spread.
+function dotColor(t, fig, strength) {
+  const s = t.s*strength, inGamut = c => c.every(v => v >= 0 && v <= 1);
+  for (let i = 0; i < 60; i++) {
+    const k = .6 + .4*Math.random();
+    const b = t.base.map(v => v*k*(.93+.14*Math.random()));
+    if (t.cone < 0) return toHex(fig ? b.map(v => v*.22) : b);
+    const lms = mul(T, b), up = [...lms], down = [...lms];
+    up[t.cone] *= 1+s; down[t.cone] *= 1-s;
+    const a = mul(Ti, up), c = mul(Ti, down);
+    if (inGamut(a) && inGamut(c)) return toHex(fig === (t.cone !== 1) ? a : c);
+  }
+  return toHex(t.base);
+}
+
+// ---- photo -> figure mask ----
+const N = 200;
+function boxBlur(a, r) {
+  const out = new Float32Array(a.length), tmp = new Float32Array(a.length);
+  for (const [src, dst, h] of [[a,tmp,true],[tmp,out,false]])
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      let s = 0, n = 0;
+      for (let d = -r; d <= r; d++) {
+        const xx = h ? x+d : x, yy = h ? y : y+d;
+        if (xx>=0 && xx<N && yy>=0 && yy<N) { s += src[yy*N+xx]; n++; }
+      }
+      dst[y*N+x] = s/n;
+    }
+  return out;
+}
+// Square crop of the photo: zoom z (1 = largest square), centered at (cx, cy) as fractions of the image.
+function cropRect(img, crop) {
+  const m = Math.min(img.width, img.height)/crop.z, clamp = (v,hi) => Math.min(Math.max(v,0),hi);
+  return [clamp(crop.cx*img.width - m/2, img.width-m), clamp(crop.cy*img.height - m/2, img.height-m), m];
+}
+function grayOf(img, crop) {
+  const c = document.createElement("canvas"); c.width = c.height = N;
+  const ctx = c.getContext("2d"), [sx, sy, m] = cropRect(img, crop);
+  ctx.drawImage(img, sx, sy, m, m, 0, 0, N, N);
+  const d = ctx.getImageData(0,0,N,N).data, g = new Float32Array(N*N);
+  for (let i = 0; i < N*N; i++) g[i] = (.299*d[i*4]+.587*d[i*4+1]+.114*d[i*4+2])/255;
+  return { g, wide: boxBlur(g, 14) };
+}
+function makeMask(src, area, detail, invert) {
+  const v = new Float32Array(N*N);
+  for (let i = 0; i < N*N; i++) v[i] = src.g[i] - detail*src.wide[i];
+  const sm = boxBlur(v, 1), sorted = Float32Array.from(sm).sort();
+  const th = sorted[Math.floor(sorted.length*area)];
+  const mask = new Uint8Array(N*N);
+  for (let i = 0; i < N*N; i++) mask[i] = (sm[i] < th) !== invert ? 1 : 0;
+  return mask;
+}
+
+// ---- dot packing ----
+function drawPlate(canvas, mask, type, size, strength) {
+  const S = canvas.width = canvas.height = 900, R = 435, ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0,0,S,S);
+  const rmin = 1.5 + size, rmax = rmin*2.6, gap = 1.5, cell = 2*rmax + gap;
+  const G = Math.ceil(2*R/cell)+1, grid = Array.from({length:G*G}, () => []);
+  const tries = Math.round(14*R*R/(rmin*rmin)), t = TYPES[type];
+  for (let i = 0; i < tries; i++) {
+    const r = Math.max(rmin, (rmax - (rmax-rmin)*Math.min(1, 1.4*i/tries)) * (.8+.2*Math.random()));
+    const a = Math.random()*2*Math.PI, d = Math.sqrt(Math.random())*(R-r);
+    const x = d*Math.cos(a), y = d*Math.sin(a);
+    const gx = Math.floor((x+R)/cell), gy = Math.floor((y+R)/cell);
+    let ok = true;
+    for (let j = gy-1; j <= gy+1 && ok; j++) for (let k = gx-1; k <= gx+1 && ok; k++) {
+      const c = grid[j*G+k]; if (!c) continue;
+      for (const o of c) if ((o[0]-x)**2 + (o[1]-y)**2 < (o[2]+r+gap)**2) { ok = false; break; }
+    }
+    if (!ok) continue;
+    grid[gy*G+gx].push([x,y,r]);
+    const mx = Math.min(N-1, Math.floor((x+R)/(2*R)*N)), my = Math.min(N-1, Math.floor((y+R)/(2*R)*N));
+    ctx.fillStyle = dotColor(t, mask[my*N+mx] === 1, strength);
+    ctx.beginPath(); ctx.arc(S/2+x, S/2+y, r, 0, 2*Math.PI); ctx.fill();
+  }
+}
+
+// ---- UI ----
+let downloads = null;
+if (window.claude) claude.use("downloads").then(d => { downloads = d; document.querySelectorAll(".dl").forEach(b => b.hidden = !d); });
+
+function addCard(img, name) {
+  const crop = { z:1, cx:.5, cy:.5 }, el = document.createElement("div");
+  el.className = "card";
+  el.innerHTML = `
+    <canvas class="plate" title="Tap for full screen"></canvas>
+    <div>
+      <div class="thumbs">
+        <figure><canvas class="orig"></canvas><figcaption>Drag to frame</figcaption></figure>
+        <figure><canvas class="mask"></canvas><figcaption>Hidden shape</figcaption></figure>
+      </div>
+      <label class="row">Zoom <span class="zoomV"></span></label>
+      <input type="range" class="zoom" min="1" max="5" step="0.1" value="1">
+      <label class="row">Plate type</label>
+      <select class="type">${Object.entries(TYPES).map(([k,v]) => `<option value="${k}">${v.label}</option>`).join("")}</select>
+      <label class="row">Shape area <span class="areaV"></span></label>
+      <input type="range" class="area" min="0.2" max="0.8" step="0.02" value="0.35">
+      <label class="row">Face detail <span class="detailV"></span></label>
+      <input type="range" class="detail" min="0" max="0.95" step="0.05" value="0.9">
+      <label class="row">Dot size <span class="sizeV"></span></label>
+      <input type="range" class="size" min="1" max="6" step="1" value="2">
+      <label class="row">Color strength <span class="strengthV"></span></label>
+      <input type="range" class="strength" min="0.3" max="1" step="0.05" value="1">
+      <label class="chk"><input type="checkbox" class="invert"> Swap shape and background</label>
+      <div class="btns">
+        <button class="primary full">Full screen</button>
+        <button class="redo">New dots</button>
+        <button class="dl" ${downloads ? "" : "hidden"}>Download PNG</button>
+        <button class="del">Remove</button>
+      </div>
+      <div class="msg"></div>
+    </div>`;
+  const $ = s => el.querySelector(s), plate = $(".plate");
+  const orig = $(".orig"), octx = orig.getContext("2d"); orig.width = orig.height = N;
+  const fit = N/Math.max(img.width, img.height), ox = (N - img.width*fit)/2, oy = (N - img.height*fit)/2;
+  function drawFrame() {
+    const [sx, sy, m] = cropRect(img, crop).map(v => v*fit);
+    octx.fillStyle = "#eee"; octx.fillRect(0,0,N,N);
+    octx.drawImage(img, ox, oy, img.width*fit, img.height*fit);
+    octx.beginPath(); octx.rect(0,0,N,N); octx.rect(ox+sx, oy+sy, m, m);
+    octx.fillStyle = "rgba(0,0,0,.55)"; octx.fill("evenodd");
+    octx.strokeStyle = "#fff"; octx.lineWidth = 2; octx.strokeRect(ox+sx, oy+sy, m, m);
+  }
+  const moveTo = e => {
+    const b = orig.getBoundingClientRect(), k = N/b.width;
+    crop.cx = Math.min(1, Math.max(0, ((e.clientX-b.left)*k - ox)/(img.width*fit)));
+    crop.cy = Math.min(1, Math.max(0, ((e.clientY-b.top)*k - oy)/(img.height*fit)));
+    drawFrame(); later();
+  };
+  orig.onpointerdown = e => { orig.setPointerCapture(e.pointerId); moveTo(e); };
+  orig.onpointermove = e => { if (orig.hasPointerCapture(e.pointerId)) moveTo(e); };
+
+  function render() {
+    const area = +$(".area").value, detail = +$(".detail").value, size = +$(".size").value;
+    $(".strengthV").textContent = Math.round(+$(".strength").value*100) + "%";
+    crop.z = +$(".zoom").value; $(".zoomV").textContent = crop.z.toFixed(1) + "×";
+    drawFrame();
+    const src = grayOf(img, crop);
+    $(".areaV").textContent = Math.round(area*100) + "%";
+    $(".detailV").textContent = Math.round(detail*100) + "%";
+    $(".sizeV").textContent = ["","tiny","small","medium","large","larger","huge"][size];
+    const mask = makeMask(src, area, detail, $(".invert").checked);
+    const mc = $(".mask"); mc.width = mc.height = N;
+    const mctx = mc.getContext("2d"), id = mctx.createImageData(N, N);
+    for (let i = 0; i < N*N; i++) { const v = mask[i] ? 40 : 235; id.data.set([v,v,v,255], i*4); }
+    mctx.putImageData(id, 0, 0);
+    drawPlate(plate, mask, $(".type").value, size, +$(".strength").value);
+  }
+  let timer;
+  const later = () => { clearTimeout(timer); timer = setTimeout(render, 120); };
+  el.querySelectorAll("input,select").forEach(i => i.addEventListener("input", later));
+  $(".redo").onclick = render;
+  $(".del").onclick = () => el.remove();
+  const full = () => (document.fullscreenElement ? document.exitFullscreen() : plate.requestFullscreen())
+    .catch(() => { $(".msg").textContent = "Full screen isn't allowed here. Open this page on its own or zoom in instead."; });
+  $(".full").onclick = full; plate.onclick = full;
+  $(".dl").onclick = () => plate.toBlob(blob =>
+    downloads.save({ filename: `${name}-${$(".type").value}.png`, data: blob })
+      .then(() => $(".msg").textContent = "Saved.")
+      .catch(e => $(".msg").textContent = e.code === "declined" ? "" : "Couldn't save the file."), "image/png");
+  document.getElementById("cards").prepend(el);
+  render();
+}
+
+function load(files) {
+  for (const f of files) {
+    if (!f.type.startsWith("image/")) continue;
+    const url = URL.createObjectURL(f), img = new Image();
+    img.onload = () => { addCard(img, f.name.replace(/\.[^.]+$/, "") || "plate"); URL.revokeObjectURL(url); };
+    img.src = url;
+  }
+}
+const fileIn = document.getElementById("file"), drop = document.getElementById("drop");
+fileIn.onchange = () => { load(fileIn.files); fileIn.value = ""; };
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); load(e.dataTransfer.files); };
+</script>
+</body>
+</html>
