@@ -77,6 +77,6 @@ When the pages are opened directly, the Who's Hiding **Download PNG** button is 
 
 ## License
 
-Free to use, share and modify for any **noncommercial** purpose, including personal use, schools, charities, research and hobby projects, under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Commercial use requires permission from the author.
+Licensed under the [Apache License 2.0](LICENSE). You're free to use, change, share and sell this work. If you distribute it or anything built from it, you must keep the copyright notice and include the [NOTICE](NOTICE) file crediting the original author.
 
 Copyright 2026 Barry Behrmann
