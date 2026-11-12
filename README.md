@@ -6,6 +6,13 @@ Each game is a single HTML file with no dependencies, build step or server. Open
 
 > **This is a home screening game, not a medical test.** Screens show color differently, so a missed plate means "get it checked," not a diagnosis. Talk to a pediatrician or eye doctor about any concerns.
 
+## To test it
+
+Open either game in your browser. Nothing to install:
+
+- **[Find the Shape](https://bbehrmann.github.io/kids-color-vision-test/find-the-shape.html)**: tap the shape hiding in the dots
+- **[Who's Hiding?](https://bbehrmann.github.io/kids-color-vision-test/whos-hiding.html)**: turn your own photos into plates
+
 ## The games
 
 ### `find-the-shape.html`: Find the Shape
