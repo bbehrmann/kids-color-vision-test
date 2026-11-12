@@ -74,3 +74,9 @@ Dots are packed with random dart-throwing on a spatial grid, from large to small
 ## Saving plates
 
 When the pages are opened directly, the Who's Hiding **Download PNG** button is hidden because it relies on a Claude artifact feature. To save a plate, right-click it (or long-press on mobile) and save the image.
+
+## License
+
+Free to use, share and modify for any **noncommercial** purpose, including personal use, schools, charities, research and hobby projects, under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Commercial use requires permission from the author.
+
+Copyright 2026 Barry Behrmann
